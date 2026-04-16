@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
   Calendar, CheckCircle, Plus, X, MessageSquare, Layout, Filter, 
   FileText, Save, History, Construction, AlertTriangle, Building2, 
@@ -6,7 +7,14 @@ import {
 } from "lucide-react";
 
 // ==========================================
-// 🎨 分類與顏色設定 (新增「公司」)
+// 🔴 Supabase 連線資訊
+// ==========================================
+const SUPABASE_URL = "https://mksmrupvgkehvfadynee.supabase.co";
+const SUPABASE_KEY = "sb_publishable_0WCOlZOefS12mmupLA5YFg_fPv_8Xn8";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ==========================================
+// 🎨 分類與顏色設定 
 // ==========================================
 const UNITS = ["公司", "建築師", "縣府", "代書"];
 
@@ -18,37 +26,51 @@ const UNIT_COLORS: Record<string, { bg: string, text: string, bar: string, borde
 };
 
 // ==========================================
-// 📦 預設模擬資料 (加入 payments 陣列)
+// 🔄 資料轉換核心 (將工程資料偽裝存入飯店的舊資料表)
 // ==========================================
-const INITIAL_DATA = [
-  {
-    id: "p1", name: "地質鑽探報告", unit: "建築師", vendor: "大華探勘", contact: "陳主任", 
-    startDate: "2026-01-10", endDate: "2026-02-28", progress: 100, status: "已完工",
-    payments: [
-      { id: 1, date: "2026-01-15", title: "第一期訂金", amount: "50,000", status: "paid" },
-      { id: 2, date: "2026-03-01", title: "尾款請款", amount: "150,000", status: "paid" }
-    ],
-    logs: [
-      { id: 3, date: "2026-03-01", content: "【付款完成】已支付：尾款請款 ($150,000)", type: "payment_done" },
-      { id: 2, date: "2026-02-28", content: "報告正式核定。", type: "success" },
-      { id: 1, date: "2026-01-10", content: "開始第一點位鑽探。", type: "info" }
-    ]
-  },
-  {
-    id: "p2", name: "室內裝修設計圖", unit: "公司", vendor: "內部設計部", contact: "李設計師", 
-    startDate: "2026-03-01", endDate: "2026-05-15", progress: 40, status: "進行中",
-    payments: [
-      { id: 1, date: "2026-03-10", title: "外部軟裝採購金", amount: "320,000", status: "pending" }
-    ],
-    logs: [
-      { id: 2, date: "2026-03-10", content: "【請款送審】提出請款：外部軟裝採購金 ($320,000)", type: "payment_req" },
-      { id: 1, date: "2026-03-01", content: "開始進行平面圖配置。", type: "info" }
-    ]
-  }
-];
+const parseEngProject = (dbProj: any) => {
+  let payments = [];
+  let logs = [];
+  try { payments = typeof dbProj.breakdown === 'string' ? JSON.parse(dbProj.breakdown) : (dbProj.breakdown || []); } catch(e){}
+  try { logs = typeof dbProj.countersign === 'string' ? JSON.parse(dbProj.countersign) : (dbProj.countersign || []); } catch(e){}
+  
+  return {
+    id: String(dbProj.id),
+    name: dbProj.title || "",
+    unit: dbProj.creator || "公司",
+    vendor: dbProj.highlights || "",
+    contact: dbProj.precautions || "",
+    startDate: dbProj.startDate || "",
+    endDate: dbProj.endDate || "",
+    progress: Number(dbProj.content) || 0,
+    status: dbProj.status || "進行中",
+    payments: Array.isArray(payments) ? payments : [],
+    logs: Array.isArray(logs) ? logs : []
+  };
+};
+
+const formatEngProjectForDb = (engProj: any) => {
+  return {
+    id: String(engProj.id),
+    title: engProj.name,
+    projectType: 'engineering',  // 關鍵標籤：用來與飯店簽呈隔離
+    creator: engProj.unit,
+    highlights: engProj.vendor,
+    precautions: engProj.contact,
+    content: String(engProj.progress),
+    startDate: engProj.startDate,
+    endDate: engProj.endDate,
+    status: engProj.status,
+    breakdown: JSON.stringify(engProj.payments || []),
+    countersign: JSON.stringify(engProj.logs || [])
+  };
+};
 
 export default function EngineeringApp() {
-  const [projects, setProjects] = useState<any[]>(INITIAL_DATA);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  const currentYear = new Date().getFullYear();
   const [selectedYear, setSelectedYear] = useState(2026);
   const [filterUnit, setFilterUnit] = useState("all");
   
@@ -65,6 +87,37 @@ export default function EngineeringApp() {
   const [newPayment, setNewPayment] = useState({ title: "", amount: "" });
 
   // ==========================================
+  // 🟢 從資料庫載入與儲存資料
+  // ==========================================
+  useEffect(() => { fetchData(); }, []);
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    try {
+      const { data } = await supabase.from("projects").select("*");
+      if (data) {
+        // 只抓取「工程系統」的專案，徹底隔離飯店的簽呈
+        const engProjects = data.filter((p: any) => p.projectType === 'engineering').map(parseEngProject);
+        setProjects(engProjects);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    setIsLoading(false);
+  };
+
+  const saveProjectToDb = async (proj: any) => {
+    const dbPayload = formatEngProjectForDb(proj);
+    const { error } = await supabase.from("projects").upsert(dbPayload);
+    if (error) {
+      alert(`連線存檔失敗：${error.message}`);
+      return false;
+    }
+    fetchData(); // 存檔成功後重新抓取最新資料
+    return true;
+  };
+
+  // ==========================================
   // 1️⃣ 排序與過濾
   // ==========================================
   const filteredList = useMemo(() => {
@@ -73,13 +126,13 @@ export default function EngineeringApp() {
       .sort((a, b) => new Date(a.startDate || 0).getTime() - new Date(b.startDate || 0).getTime());
   }, [projects, selectedYear, filterUnit]);
 
-  // 總待審核請款數計算 (Dashboard用)
+  // 總待審核請款數計算
   const totalPendingPayments = useMemo(() => {
     return filteredList.reduce((total, p) => total + (p.payments?.filter((pay: any) => pay.status === "pending").length || 0), 0);
   }, [filteredList]);
 
   // ==========================================
-  // 2️⃣ 甘特圖計算
+  // 2️⃣ 甘特圖計算防呆防白屏
   // ==========================================
   const getBarStyles = (start: string, end: string) => {
     try {
@@ -94,7 +147,7 @@ export default function EngineeringApp() {
   };
 
   // ==========================================
-  // 3️⃣ 專案操作
+  // 3️⃣ 專案視窗操作
   // ==========================================
   const handleOpenEdit = (p: any) => {
     const target = { ...p, payments: p.payments || [], logs: p.logs || [] };
@@ -107,7 +160,7 @@ export default function EngineeringApp() {
 
   const handleOpenCreate = () => {
     const newProj = { 
-      id: "p_" + Date.now(), name: "", unit: "公司", vendor: "", contact: "", 
+      id: "eng_" + Date.now(), name: "", unit: "公司", vendor: "", contact: "", 
       startDate: `${selectedYear}-01-01`, endDate: `${selectedYear}-03-31`, 
       progress: 0, status: "規劃中", logs: [], payments: [] 
     };
@@ -117,18 +170,24 @@ export default function EngineeringApp() {
     setIsModalOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editingProject?.name) return alert("請輸入專案名稱");
-    const isExist = projects.some(p => p.id === editingProject.id);
-    if (isExist) setProjects(projects.map(p => p.id === editingProject.id ? editingProject : p));
-    else setProjects([...projects, { ...editingProject, logs: [{ id: Date.now(), date: todayStr, content: "建立工程專案。", type: "info" }] }]);
-    setIsModalOpen(false);
+    if (!editingProject?.startDate || !editingProject?.endDate) return alert("請填寫完整日期");
+    
+    let projToSave = { ...editingProject };
+    // 如果是全新專案，自動產生一筆建立紀錄
+    if (projToSave.logs.length === 0) {
+      projToSave.logs = [{ id: Date.now(), date: todayStr, content: "建立工程專案。", type: "info" }];
+    }
+    
+    const success = await saveProjectToDb(projToSave);
+    if (success) setIsModalOpen(false);
   };
 
   // ==========================================
-  // 4️⃣ 進度日誌操作
+  // 4️⃣ 進度日誌操作 (寫入資料庫)
   // ==========================================
-  const handleAddLog = () => {
+  const handleAddLog = async () => {
     if (!newLog.content.trim()) return alert("請輸入日誌內容");
     let updated = { ...editingProject };
     let logs = [...(updated.logs || [])];
@@ -145,47 +204,56 @@ export default function EngineeringApp() {
     }
     
     updated.logs = logs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
+    // 預先更新畫面，然後背景儲存
     setEditingProject(updated);
-    setProjects(projects.map(p => p.id === updated.id ? updated : p));
-    setNewLog({ ...newLog, content: "", updateProgress: false, updateEndDate: false });
+    await saveProjectToDb(updated);
+    setNewLog({ date: todayStr, content: "", updateProgress: false, newProgress: updated.progress, updateEndDate: false, newEndDate: updated.endDate });
   };
 
   // ==========================================
-  // 5️⃣ 財務請款操作
+  // 5️⃣ 財務請款操作 (寫入資料庫)
   // ==========================================
-  const handleAddPayment = () => {
+  const handleAddPayment = async () => {
     if (!newPayment.title || !newPayment.amount) return alert("請輸入請款項目與金額");
     
     let updated = { ...editingProject };
     const paymentRecord = { id: Date.now(), date: todayStr, title: newPayment.title, amount: newPayment.amount, status: "pending" };
     updated.payments = [paymentRecord, ...(updated.payments || [])];
     
-    // 自動寫入歷史日誌
     updated.logs = [
       { id: Date.now()+1, date: todayStr, content: `【請款送審】提出請款：${newPayment.title} ($${newPayment.amount})`, type: "payment_req" },
       ...(updated.logs || [])
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     setEditingProject(updated);
-    setProjects(projects.map(p => p.id === updated.id ? updated : p));
+    await saveProjectToDb(updated);
     setNewPayment({ title: "", amount: "" });
   };
 
-  const handleApprovePayment = (payId: number) => {
+  const handleApprovePayment = async (payId: number) => {
     let updated = { ...editingProject };
     const payIndex = updated.payments.findIndex((p: any) => p.id === payId);
     if (payIndex > -1) {
       updated.payments[payIndex].status = "paid";
-      // 自動寫入歷史日誌
       updated.logs = [
         { id: Date.now(), date: todayStr, content: `【付款完成】已支付：${updated.payments[payIndex].title} ($${updated.payments[payIndex].amount})`, type: "payment_done" },
         ...(updated.logs || [])
       ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       
       setEditingProject(updated);
-      setProjects(projects.map(p => p.id === updated.id ? updated : p));
+      await saveProjectToDb(updated);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center">
+        <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <div className="text-indigo-600 font-bold">資料庫同步連線中...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-12 font-sans">
@@ -246,6 +314,7 @@ export default function EngineeringApp() {
                 <div className="absolute inset-0 flex ml-80 pointer-events-none">{[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <div key={`bg-${m}`} className="flex-1 border-r border-slate-200/50"></div>)}</div>
                 
                 <div className="relative z-10">
+                  {filteredList.length === 0 && <div className="py-16 text-center text-slate-400 font-bold">該條件下目前無工程專案</div>}
                   {filteredList.map(p => {
                     const color = UNIT_COLORS[p.unit] || UNIT_COLORS["公司"];
                     const hasPendingPayment = (p.payments || []).some((pay: any) => pay.status === 'pending');
@@ -290,7 +359,7 @@ export default function EngineeringApp() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[95vh] overflow-hidden border border-slate-200">
             
             <div className="px-6 py-4 border-b bg-slate-50 flex justify-between items-center shadow-sm z-10">
-              <h2 className="text-lg font-black text-slate-800 flex items-center gap-2"><FileText className="text-slate-500" /> {editingProject.id.startsWith('p_') ? "新增工程" : editingProject.name}</h2>
+              <h2 className="text-lg font-black text-slate-800 flex items-center gap-2"><FileText className="text-slate-500" /> {String(editingProject.id).startsWith('eng_') ? "新增工程" : editingProject.name}</h2>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-800 bg-white border rounded p-1"><X size={20} /></button>
             </div>
             
@@ -299,7 +368,7 @@ export default function EngineeringApp() {
               {/* ⬅️ 左側：基本資訊 */}
               <div className="flex-1 space-y-5 bg-white p-6 rounded-xl border border-slate-200 h-fit shadow-sm">
                 <h3 className="font-black text-slate-800 border-b pb-3 flex items-center gap-2"><Layout className="text-indigo-500" size={18}/> 工程基本設定</h3>
-                <div><label className="block text-xs font-bold text-slate-500 mb-1">工程名稱</label><input className="w-full border rounded-lg p-2.5 font-bold text-slate-800 outline-none focus:border-indigo-500 bg-slate-50" value={editingProject.name} onChange={e => setEditingProject({...editingProject, name: e.target.value})} placeholder="例如：主體結構" /></div>
+                <div><label className="block text-xs font-bold text-slate-500 mb-1">工程名稱 <span className="text-red-500">*</span></label><input className="w-full border rounded-lg p-2.5 font-bold text-slate-800 outline-none focus:border-indigo-500 bg-slate-50" value={editingProject.name} onChange={e => setEditingProject({...editingProject, name: e.target.value})} placeholder="例如：主體結構" /></div>
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div><label className="block text-xs font-bold text-slate-500 mb-1">分類</label><select className="w-full border rounded-lg p-2.5 font-bold text-slate-800 outline-none focus:border-indigo-500 bg-slate-50" value={editingProject.unit} onChange={e => setEditingProject({...editingProject, unit: e.target.value})}>{UNITS.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
@@ -315,8 +384,8 @@ export default function EngineeringApp() {
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4">
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">預計開工</label><input type="date" className="w-full border rounded-lg p-2 text-sm font-bold bg-slate-50 outline-none focus:border-indigo-500" value={editingProject.startDate} onChange={e => setEditingProject({...editingProject, startDate: e.target.value})} /></div>
-                  <div><label className="block text-xs font-bold text-slate-500 mb-1">預計完工</label><input type="date" className="w-full border rounded-lg p-2 text-sm font-bold bg-slate-50 outline-none focus:border-indigo-500" value={editingProject.endDate} onChange={e => setEditingProject({...editingProject, endDate: e.target.value})} /></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">預計開工 <span className="text-red-500">*</span></label><input type="date" className="w-full border rounded-lg p-2 text-sm font-bold bg-slate-50 outline-none focus:border-indigo-500" value={editingProject.startDate} onChange={e => setEditingProject({...editingProject, startDate: e.target.value})} /></div>
+                  <div><label className="block text-xs font-bold text-slate-500 mb-1">預計完工 <span className="text-red-500">*</span></label><input type="date" className="w-full border rounded-lg p-2 text-sm font-bold bg-slate-50 outline-none focus:border-indigo-500" value={editingProject.endDate} onChange={e => setEditingProject({...editingProject, endDate: e.target.value})} /></div>
                 </div>
                 <button onClick={handleSave} className="w-full bg-slate-800 text-white py-3 rounded-xl font-bold hover:bg-slate-900 shadow-md flex items-center justify-center gap-2 transition-colors"><Save size={18}/> 儲存專案設定</button>
               </div>
@@ -355,7 +424,7 @@ export default function EngineeringApp() {
                             {newLog.updateEndDate && <input type="date" className="w-full border rounded p-1 text-sm font-bold text-red-600 outline-none" value={newLog.newEndDate} onChange={e => setNewLog({...newLog, newEndDate: e.target.value})} />}
                           </div>
                         </div>
-                        <button onClick={handleAddLog} className="w-full bg-indigo-600 text-white font-bold py-2.5 rounded-lg hover:bg-indigo-700 shadow-sm text-sm">送出進度</button>
+                        <button onClick={handleAddLog} className="w-full bg-indigo-600 text-white font-bold py-2.5 rounded-lg hover:bg-indigo-700 shadow-sm text-sm">送出進度 (寫入資料庫)</button>
                       </div>
                     </div>
 
@@ -366,7 +435,6 @@ export default function EngineeringApp() {
                         {(editingProject.logs || []).length === 0 && <div className="text-slate-400 text-xs py-4">尚無紀錄</div>}
                         {(editingProject.logs || []).map((log: any) => (
                           <div key={log.id} className="relative">
-                            {/* 圓點顏色判斷 (加入財務判斷) */}
                             <div className={`absolute -left-[27px] top-0.5 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm 
                               ${log.type === 'success' ? 'bg-emerald-500' : 
                                 log.type === 'date_change' ? 'bg-red-500' : 
@@ -416,7 +484,7 @@ export default function EngineeringApp() {
                           </div>
                        </div>
                        <button onClick={handleAddPayment} className="w-full mt-3 bg-amber-500 text-amber-950 font-black py-2.5 rounded-lg hover:bg-amber-600 shadow-sm text-sm flex justify-center items-center gap-2">
-                         <Plus size={16}/> 送出請款申請 (自動列入歷史紀錄)
+                         <Plus size={16}/> 送出請款申請 (寫入資料庫)
                        </button>
                     </div>
 
