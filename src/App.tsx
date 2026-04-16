@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import {
   Calendar, CheckCircle, Plus, X, MessageSquare, Layout, Filter, 
   FileText, Save, History, Construction, AlertTriangle, Building2, 
-  UserCircle, DollarSign, Receipt, CreditCard, UploadCloud, FileSpreadsheet
+  UserCircle, DollarSign, Receipt, CreditCard, UploadCloud, FileSpreadsheet, Edit
 } from "lucide-react";
 
 // ==========================================
@@ -75,7 +75,7 @@ export default function EngineeringApp() {
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [filterUnit, setFilterUnit] = useState("all");
   
-  // 視窗狀態 (加強版 Z-index 保護)
+  // 視窗狀態
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -145,7 +145,7 @@ export default function EngineeringApp() {
   };
 
   // ==========================================
-  // 2️⃣ 專案視窗操作 (修復按鈕無反應)
+  // 2️⃣ 專案視窗操作
   // ==========================================
   const handleOpenEdit = (p: any) => {
     const target = { ...p, payments: p.payments || [], logs: p.logs || [] };
@@ -182,7 +182,7 @@ export default function EngineeringApp() {
   };
 
   // ==========================================
-  // 3️⃣ Excel 匯入解析 (恢復並強化)
+  // 3️⃣ Excel 匯入解析
   // ==========================================
   const handleProcessImport = async () => {
     if (!importFile) return alert("請先選擇 Excel 檔案！");
@@ -216,7 +216,7 @@ export default function EngineeringApp() {
       
       setIsImportModalOpen(false);
       setImportFile(null);
-      setIsModalOpen(true); // 打開編輯視窗讓使用者確認
+      setIsModalOpen(true); 
       
     } catch (e) {
       alert("讀取 Excel 失敗，請確認檔案格式 (.xlsx 或 .csv)！");
@@ -299,7 +299,6 @@ export default function EngineeringApp() {
           </select>
         </div>
         
-        {/* 恢復匯入按鈕，並排新增專案 */}
         <div className="flex items-center gap-3">
           <button onClick={() => setIsImportModalOpen(true)} className="bg-slate-600 hover:bg-slate-500 text-white px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all shadow-md active:scale-95">
             <UploadCloud className="w-4 h-4" /> <span className="hidden sm:inline">匯入 Excel</span>
@@ -392,7 +391,7 @@ export default function EngineeringApp() {
       </main>
 
       {/* ================================================== */}
-      {/* 📥 匯入 Excel Modal (層級提升至 z-100) */}
+      {/* 📥 匯入 Excel Modal */}
       {/* ================================================== */}
       {isImportModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm">
@@ -418,7 +417,7 @@ export default function EngineeringApp() {
       )}
 
       {/* ================================================== */}
-      {/* 💥 專案管理 Modal (層級提升至 z-[100]) */}
+      {/* 💥 專案管理 Modal */}
       {/* ================================================== */}
       {isModalOpen && editingProject && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm">
