@@ -112,7 +112,6 @@ export default function EngineeringApp() {
   const [newLog, setNewLog] = useState({ date: todayStr, content: "", updateProgress: false, newProgress: 0, updateEndDate: false, newEndDate: "" });
   const [newPayment, setNewPayment] = useState({ date: todayStr, title: "", amount: "" });
 
-  // 🛡️ 軍規級權限判定
   const isAdmin = currentUser !== null && currentUser !== undefined;
 
   // ==========================================
