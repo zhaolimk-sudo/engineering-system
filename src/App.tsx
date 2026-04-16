@@ -87,7 +87,9 @@ export default function EngineeringApp() {
   // 表單狀態
   const todayStr = new Date().toISOString().split("T")[0];
   const [newLog, setNewLog] = useState({ date: todayStr, content: "", updateProgress: false, newProgress: 0, updateEndDate: false, newEndDate: "" });
-  const [newPayment, setNewPayment] = useState({ title: "", amount: "" });
+  
+  // 🌟 財務請款表單：加入自訂日期欄位，預設為今天
+  const [newPayment, setNewPayment] = useState({ date: todayStr, title: "", amount: "" });
 
   // ==========================================
   // 🟢 從資料庫載入與儲存資料
@@ -152,7 +154,7 @@ export default function EngineeringApp() {
     setEditingProject(target);
     setActiveTab("progress");
     setNewLog({ date: todayStr, content: "", updateProgress: false, newProgress: target.progress || 0, updateEndDate: false, newEndDate: target.endDate || "" });
-    setNewPayment({ title: "", amount: "" });
+    setNewPayment({ date: todayStr, title: "", amount: "" });
     setIsModalOpen(true);
   };
 
@@ -165,6 +167,7 @@ export default function EngineeringApp() {
     setEditingProject(newProj);
     setActiveTab("progress");
     setNewLog({ date: todayStr, content: "", updateProgress: false, newProgress: 0, updateEndDate: false, newEndDate: newProj.endDate });
+    setNewPayment({ date: todayStr, title: "", amount: "" });
     setIsModalOpen(true);
   };
 
@@ -195,7 +198,6 @@ export default function EngineeringApp() {
 
       if (!extractedText.trim()) return alert("檔案內無有效文字內容！");
 
-      // 自動建立新專案並帶入 Excel 內容
       const newProj = { 
         id: "eng_" + Date.now(), 
         name: "【從 Excel 匯入】請修改名稱", 
@@ -213,6 +215,7 @@ export default function EngineeringApp() {
       setEditingProject(newProj);
       setActiveTab("progress");
       setNewLog({ date: todayStr, content: "", updateProgress: false, newProgress: 0, updateEndDate: false, newEndDate: newProj.endDate });
+      setNewPayment({ date: todayStr, title: "", amount: "" });
       
       setIsImportModalOpen(false);
       setImportFile(null);
@@ -249,18 +252,22 @@ export default function EngineeringApp() {
   };
 
   const handleAddPayment = async () => {
-    if (!newPayment.title || !newPayment.amount) return alert("請輸入請款項目與金額");
+    if (!newPayment.date || !newPayment.title || !newPayment.amount) return alert("請輸入請款日期、項目與金額");
     let updated = { ...editingProject };
-    const paymentRecord = { id: Date.now(), date: todayStr, title: newPayment.title, amount: newPayment.amount, status: "pending" };
+    
+    // 使用者自訂的日期
+    const paymentRecord = { id: Date.now(), date: newPayment.date, title: newPayment.title, amount: newPayment.amount, status: "pending" };
     updated.payments = [paymentRecord, ...(updated.payments || [])];
+    
+    // 自動寫入歷史，使用自訂日期排序
     updated.logs = [
-      { id: Date.now()+1, date: todayStr, content: `【請款送審】提出請款：${newPayment.title} ($${newPayment.amount})`, type: "payment_req" },
+      { id: Date.now()+1, date: newPayment.date, content: `【請款送審】提出請款：${newPayment.title} ($${newPayment.amount})`, type: "payment_req" },
       ...(updated.logs || [])
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     setEditingProject(updated);
     await saveProjectToDb(updated);
-    setNewPayment({ title: "", amount: "" });
+    setNewPayment({ date: todayStr, title: "", amount: "" });
   };
 
   const handleApprovePayment = async (payId: number) => {
@@ -268,6 +275,8 @@ export default function EngineeringApp() {
     const payIndex = updated.payments.findIndex((p: any) => p.id === payId);
     if (payIndex > -1) {
       updated.payments[payIndex].status = "paid";
+      
+      // 核准付款以「當下核准的這一天」作為紀錄日
       updated.logs = [
         { id: Date.now(), date: todayStr, content: `【付款完成】已支付：${updated.payments[payIndex].title} ($${updated.payments[payIndex].amount})`, type: "payment_done" },
         ...(updated.logs || [])
@@ -527,12 +536,20 @@ export default function EngineeringApp() {
                     <div className="bg-white p-5 rounded-xl border border-amber-200 shadow-sm relative overflow-hidden shrink-0">
                        <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-500"></div>
                        <h3 className="font-black text-amber-900 mb-3 flex items-center gap-2"><CreditCard size={18}/> 申請工程款 / 墊付款</h3>
+                       
                        <div className="flex flex-col sm:flex-row gap-3">
+                          {/* 🌟 獨立的請款日期設定 */}
+                          <div className="w-full sm:w-36">
+                             <label className="text-[10px] font-bold text-slate-400 mb-1 block">請款日期</label>
+                             <input type="date" className="w-full border rounded p-2 text-sm font-bold bg-slate-50 outline-none focus:border-amber-500" value={newPayment.date} onChange={e => setNewPayment({...newPayment, date: e.target.value})} />
+                          </div>
+                          
                           <div className="flex-1">
                              <label className="text-[10px] font-bold text-slate-400 mb-1 block">請款名目</label>
                              <input type="text" className="w-full border rounded p-2 text-sm font-bold bg-slate-50 outline-none focus:border-amber-500" value={newPayment.title} onChange={e => setNewPayment({...newPayment, title: e.target.value})} placeholder="如：第一期訂金、材料墊付" />
                           </div>
-                          <div className="w-full sm:w-40">
+                          
+                          <div className="w-full sm:w-32">
                              <label className="text-[10px] font-bold text-slate-400 mb-1 block">申請金額</label>
                              <div className="relative">
                                <span className="absolute left-2 top-2 font-bold text-slate-400">$</span>
@@ -540,6 +557,7 @@ export default function EngineeringApp() {
                              </div>
                           </div>
                        </div>
+                       
                        <button onClick={handleAddPayment} className="w-full mt-3 bg-amber-500 text-amber-950 font-black py-2.5 rounded-lg hover:bg-amber-600 shadow-sm text-sm flex justify-center items-center gap-2">
                          <Plus size={16}/> 送出請款申請 (寫入資料庫)
                        </button>
