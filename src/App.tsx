@@ -25,8 +25,9 @@ const UNIT_COLORS: Record<string, { bg: string, text: string, bar: string, borde
 };
 
 // ==========================================
-// ⚙️ 計算核心
+// ⚙️ 輔助功能
 // ==========================================
+// 自動計算進度
 const calculateAutoProgressValue = (start: string, end: string) => {
   if (!start || !end) return 0;
   const today = new Date().setHours(0,0,0,0);
@@ -62,6 +63,12 @@ const calculateWeightedProjectProgress = (phases: any[], fallbackStart: string, 
 
   const overallProg = totalDuration > 0 ? Math.round(weightedProgressSum / totalDuration) : 0;
   return { startDate: minStart, endDate: maxEnd, progress: overallProg, updatedPhases: validPhases };
+};
+
+// 🌟 金額加上千分位逗號
+const formatCurrency = (val: string) => {
+  const numStr = val.replace(/\D/g, ''); // 拔除所有非數字字元
+  return numStr ? Number(numStr).toLocaleString('en-US') : '';
 };
 
 // ==========================================
@@ -110,12 +117,14 @@ export default function EngineeringApp() {
 
   const todayStr = new Date().toISOString().split("T")[0];
   const [newLog, setNewLog] = useState({ date: todayStr, content: "", updateProgress: false, newProgress: 0, updateEndDate: false, newEndDate: "" });
-  const [newPayment, setNewPayment] = useState({ date: todayStr, title: "", amount: "" });
+  
+  // 🌟 財務請款單狀態：加入 note (備註說明)
+  const [newPayment, setNewPayment] = useState({ date: todayStr, title: "", amount: "", note: "" });
 
   const isAdmin = currentUser !== null && currentUser !== undefined;
 
   // ==========================================
-  // 🟢 系統初始化與資料載入
+  // 🟢 資料載入與儲存
   // ==========================================
   useEffect(() => { 
     const savedAccount = localStorage.getItem("mpr_account");
@@ -240,7 +249,7 @@ export default function EngineeringApp() {
     setEditingProject(target);
     setActiveTab("progress");
     setNewLog({ date: todayStr, content: "", updateProgress: false, newProgress: target.progress || 0, updateEndDate: false, newEndDate: target.endDate || "" });
-    setNewPayment({ date: todayStr, title: "", amount: "" });
+    setNewPayment({ date: todayStr, title: "", amount: "", note: "" });
     setIsModalOpen(true);
   };
 
@@ -250,7 +259,7 @@ export default function EngineeringApp() {
     setEditingProject(newProj);
     setActiveTab("progress");
     setNewLog({ date: todayStr, content: "", updateProgress: false, newProgress: 0, updateEndDate: false, newEndDate: newProj.endDate });
-    setNewPayment({ date: todayStr, title: "", amount: "" });
+    setNewPayment({ date: todayStr, title: "", amount: "", note: "" });
     setIsModalOpen(true);
   };
 
@@ -317,23 +326,39 @@ export default function EngineeringApp() {
 
   const handleAddPayment = async () => {
     if (!isAdmin) return;
-    if (!newPayment.date || !newPayment.title || !newPayment.amount) return alert("請輸入完整請款資訊");
+    if (!newPayment.date || !newPayment.title || !newPayment.amount) return alert("請輸入完整請款資訊 (日期、項目、金額)");
+    
     let updated = { ...editingProject };
-    const paymentRecord = { id: Date.now(), date: newPayment.date, title: newPayment.title, amount: newPayment.amount, status: "pending" };
+    const paymentRecord = { 
+      id: Date.now(), date: newPayment.date, title: newPayment.title, 
+      amount: newPayment.amount, note: newPayment.note, status: "pending" 
+    };
     updated.payments = [paymentRecord, ...(updated.payments || [])];
-    updated.logs = [{ id: Date.now()+1, date: newPayment.date, content: `【請款送審】提出請款：${newPayment.title} ($${newPayment.amount})`, type: "payment_req" }, ...(updated.logs || [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
+    const logContent = `【請款送審】提出請款：${newPayment.title} ($${newPayment.amount})${newPayment.note ? `\n說明：${newPayment.note}` : ''}`;
+    updated.logs = [{ id: Date.now()+1, date: newPayment.date, content: logContent, type: "payment_req" }, ...(updated.logs || [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
     setEditingProject(updated);
     await saveProjectToDb(updated);
-    setNewPayment({ date: todayStr, title: "", amount: "" });
+    setNewPayment({ date: todayStr, title: "", amount: "", note: "" });
   };
 
   const handleApprovePayment = async (payId: number) => {
     if (!isAdmin) return;
+    
+    // 🌟 跳出視窗讓主管輸入核准備註
+    const approveNote = window.prompt("請輸入撥款備註 (選填，例如：匯款帳號、支票號碼、折讓細節)：");
+    if (approveNote === null) return; // 點擊取消則不動作
+
     let updated = { ...editingProject };
     const payIndex = (updated.payments || []).findIndex((p: any) => p.id === payId);
     if (payIndex > -1) {
       updated.payments[payIndex].status = "paid";
-      updated.logs = [{ id: Date.now(), date: todayStr, content: `【付款完成】已支付：${updated.payments[payIndex].title} ($${updated.payments[payIndex].amount})`, type: "payment_done" }, ...(updated.logs || [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      updated.payments[payIndex].approveNote = approveNote; // 存入核准備註
+
+      const logContent = `【付款完成】已支付：${updated.payments[payIndex].title} ($${updated.payments[payIndex].amount})${approveNote ? `\n撥款備註：${approveNote}` : ''}`;
+      updated.logs = [{ id: Date.now(), date: todayStr, content: logContent, type: "payment_done" }, ...(updated.logs || [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
       setEditingProject(updated);
       await saveProjectToDb(updated);
     }
@@ -493,7 +518,7 @@ export default function EngineeringApp() {
                             {isAdmin && <button onClick={(e) => { e.stopPropagation(); handleDeleteProject(p.id, p.name); }} className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 p-1 md:p-2 transition-all no-print z-20 bg-white/80 rounded"><Trash2 size={14}/></button>}
                           </div>
                           <div className="flex-1 relative py-3 md:py-4 cursor-pointer" onClick={() => handleOpenEdit(p)}>
-                            <div className={`absolute top-1/2 -translate-y-1/2 h-5 md:h-6 rounded shadow-sm flex items-center overflow-hidden transition-all group-hover:brightness-105 border border-black/5 ${color.bar}`} style={getBarStyles(p.startDate, p.endDate)}>
+                            <div className={`absolute top-1/2 -translate-y-1/2 h-5 md:h-6 rounded shadow-sm border border-black/5 flex items-center overflow-hidden transition-all group-hover:brightness-105 ${color.bar}`} style={getBarStyles(p.startDate, p.endDate)}>
                               <div className="absolute left-0 h-full bg-white/30" style={{ width: `${p.progress}%` }}></div>
                               <span className="relative z-10 px-1 md:px-2 text-[8px] md:text-[9px] print-text-xs font-black text-white drop-shadow-sm">{p.progress}%</span>
                             </div>
@@ -545,10 +570,10 @@ export default function EngineeringApp() {
 
       {/* 💥 專案管理 Modal */}
       {isModalOpen && editingProject && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-slate-900/70 backdrop-blur-sm no-print">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl flex flex-col max-h-[95vh] overflow-hidden border border-slate-200">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-slate-900/70 backdrop-blur-sm no-print">
+          <div className="bg-white rounded-none sm:rounded-2xl shadow-2xl w-full h-full sm:h-auto max-w-6xl flex flex-col sm:max-h-[95vh] overflow-hidden border border-slate-200">
             
-            <div className="px-4 sm:px-6 py-3 sm:py-4 border-b bg-slate-50 flex justify-between items-center z-10 shadow-sm">
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-b bg-slate-50 flex justify-between items-center z-10 shadow-sm flex-shrink-0">
               <h2 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2 truncate pr-4">
                  <FileText size={18} className="text-slate-500 flex-shrink-0"/> 
                  <span className="truncate">{String(editingProject.id || '').startsWith('eng_') ? "新增工程專案" : (editingProject.name || '')}</span>
@@ -557,10 +582,11 @@ export default function EngineeringApp() {
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-800 bg-white border rounded p-1 flex-shrink-0"><X size={20} /></button>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-slate-100 flex flex-col lg:flex-row gap-4 sm:gap-6">
+            {/* 🌟 手機版捲軸重構：外層負責滑動，內層不鎖死高度 */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-slate-100 flex flex-col lg:flex-row gap-4 sm:gap-6 lg:overflow-hidden">
               
               {/* ⬅️ 左側：基本設定 */}
-              <div className="flex-1 space-y-4 bg-white p-4 sm:p-6 rounded-xl border border-slate-200 h-fit shadow-sm">
+              <div className="w-full lg:w-5/12 space-y-4 bg-white p-4 sm:p-6 rounded-xl border border-slate-200 h-fit lg:h-full lg:overflow-y-auto shadow-sm flex-shrink-0">
                 <h3 className="font-black text-slate-800 border-b pb-3 flex items-center gap-2 text-sm"><Layout size={18} className="text-indigo-500"/> 基本設定</h3>
                 
                 <div>
@@ -600,7 +626,7 @@ export default function EngineeringApp() {
                       <div><label className="block text-[10px] font-black text-slate-400 mb-1 uppercase">預計完工</label><input type="date" className="w-full border rounded-lg p-2 text-xs sm:text-sm font-bold bg-slate-50 outline-none focus:border-indigo-500 disabled:bg-transparent disabled:border-slate-100 disabled:text-slate-600" disabled={!isAdmin} value={editingProject.endDate ?? ''} onChange={e => setEditingProject({...editingProject, endDate: e.target.value})} /></div>
                     </div>
                   ) : (
-                    <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                    <div className="space-y-2">
                       {(editingProject.phases || []).map((phase: any, idx: number) => (
                         <div key={phase.id || idx} className={`p-2 rounded-lg border flex flex-wrap sm:flex-nowrap items-center gap-2 ${isAdmin ? 'bg-slate-50 border-slate-200' : 'bg-transparent border-slate-100'}`}>
                           <input className="flex-1 min-w-[80px] w-full sm:w-auto text-xs font-bold p-1.5 border rounded outline-none disabled:bg-transparent disabled:border-none disabled:p-0" disabled={!isAdmin} value={phase.name ?? ''} onChange={(e) => handlePhaseChange(idx, 'name', e.target.value)} placeholder="階段名稱"/>
@@ -630,8 +656,8 @@ export default function EngineeringApp() {
               </div>
 
               {/* ➡️ 右側：雙頁籤 */}
-              <div className="flex-[1.5] flex flex-col h-[500px] lg:h-full">
-                <div className="flex gap-2 mb-3 sm:mb-4 bg-white p-1 sm:p-1.5 rounded-lg border border-slate-200 shadow-sm w-fit">
+              <div className="w-full lg:w-7/12 flex flex-col gap-4 h-auto lg:h-full">
+                <div className="flex gap-2 bg-white p-1 sm:p-1.5 rounded-lg border border-slate-200 shadow-sm w-fit flex-shrink-0">
                    <button onClick={() => setActiveTab('progress')} className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md font-bold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 transition-all ${activeTab === 'progress' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><History size={14}/> 進度日誌</button>
                    <button onClick={() => setActiveTab('finance')} className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md font-bold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 transition-all ${activeTab === 'finance' ? 'bg-amber-50 text-amber-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                       <DollarSign size={14}/> 財務請款
@@ -640,7 +666,7 @@ export default function EngineeringApp() {
                 </div>
 
                 {activeTab === 'progress' && (
-                  <div className="flex flex-col gap-4 sm:gap-6 flex-1 min-h-0">
+                  <div className="flex flex-col gap-4 sm:gap-6 flex-1 min-h-[400px] lg:min-h-0 lg:overflow-hidden">
                     
                     {isAdmin && (
                       <div className="bg-white p-4 sm:p-5 rounded-xl border border-indigo-100 shadow-sm relative shrink-0">
@@ -669,7 +695,7 @@ export default function EngineeringApp() {
                       </div>
                     )}
 
-                    <div className="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm flex-1 overflow-y-auto">
+                    <div className="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm flex-1 lg:overflow-y-auto">
                       <div className="border-l-2 border-slate-100 ml-1 sm:ml-2 pl-4 sm:pl-5 space-y-4 sm:space-y-5">
                         {(editingProject.logs || []).length === 0 && <div className="text-slate-400 text-xs py-4 text-center font-bold">尚無紀錄</div>}
                         {(editingProject.logs || []).map((log: any) => (
@@ -690,7 +716,7 @@ export default function EngineeringApp() {
                 )}
 
                 {activeTab === 'finance' && (
-                  <div className="flex flex-col gap-4 sm:gap-6 flex-1 min-h-0">
+                  <div className="flex flex-col gap-4 sm:gap-6 flex-1 min-h-[400px] lg:min-h-0 lg:overflow-hidden">
                     
                     {isAdmin && (
                       <div className="bg-white p-4 sm:p-5 rounded-xl border border-amber-200 shadow-sm relative shrink-0">
@@ -702,34 +728,49 @@ export default function EngineeringApp() {
                             <div className="w-full sm:w-32"><label className="text-[9px] sm:text-[10px] font-black text-slate-400 mb-0.5 sm:mb-1 block">申請金額</label>
                               <div className="relative">
                                 <span className="absolute left-2 top-[7px] md:top-[9px] font-bold text-slate-400 text-xs md:text-sm">$</span>
-                                <input type="text" className="w-full border rounded p-1.5 sm:p-2 pl-5 sm:pl-6 text-xs sm:text-sm font-bold bg-slate-50 outline-none focus:border-amber-500 text-right" value={newPayment.amount ?? ''} onChange={e => setNewPayment({...newPayment, amount: e.target.value})} placeholder="50,000" />
+                                {/* 🌟 自動千分位格式化 */}
+                                <input type="text" className="w-full border rounded p-1.5 sm:p-2 pl-5 sm:pl-6 text-xs sm:text-sm font-bold bg-slate-50 outline-none focus:border-amber-500 text-right" value={newPayment.amount ?? ''} onChange={e => setNewPayment({...newPayment, amount: formatCurrency(e.target.value)})} placeholder="50,000" />
                               </div>
                             </div>
+                         </div>
+                         <div className="mt-2 sm:mt-3">
+                           <label className="text-[9px] sm:text-[10px] font-black text-slate-400 mb-0.5 sm:mb-1 block">請款說明 / 備註 (選填)</label>
+                           <input type="text" className="w-full border rounded p-1.5 sm:p-2 text-xs sm:text-sm font-bold bg-slate-50 outline-none focus:border-amber-500" value={newPayment.note ?? ''} onChange={e => setNewPayment({...newPayment, note: e.target.value})} placeholder="例如：匯款帳號、預支說明..." />
                          </div>
                          <button onClick={handleAddPayment} className="w-full mt-3 bg-amber-500 text-amber-950 font-black py-2 sm:py-2.5 rounded-lg hover:bg-amber-600 shadow-sm text-xs sm:text-sm">送出請款</button>
                       </div>
                     )}
 
-                    <div className="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm flex-1 overflow-y-auto">
-                       <div className="space-y-2 sm:space-y-3">
+                    <div className="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm flex-1 lg:overflow-y-auto">
+                       <div className="space-y-3 sm:space-y-4">
                          {(!editingProject.payments || editingProject.payments.length === 0) && <div className="text-center text-slate-400 text-xs py-8 font-bold border border-dashed rounded-lg bg-slate-50">無請款紀錄</div>}
                          {(editingProject.payments || []).map((pay: any) => (
-                           <div key={pay.id} className={`flex items-center justify-between p-2 sm:p-3 rounded-lg border ${pay.status === 'pending' ? 'bg-amber-50/50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
-                              <div>
-                                <div className="font-bold text-xs sm:text-sm text-slate-800">{pay.title}</div>
-                                <div className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5">日期: {pay.date}</div>
+                           <div key={pay.id} className={`flex flex-col p-3 sm:p-4 rounded-xl border ${pay.status === 'pending' ? 'bg-amber-50/30 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="font-bold text-sm sm:text-base text-slate-800">{pay.title}</div>
+                                  <div className="text-[9px] sm:text-[10px] text-slate-500 mt-0.5 font-bold">申請日: {pay.date}</div>
+                                </div>
+                                <div className="flex items-center gap-2 sm:gap-3">
+                                   <div className="font-black text-base sm:text-xl text-slate-700">${pay.amount}</div>
+                                   {pay.status === 'pending' ? (
+                                      isAdmin ? (
+                                        <button onClick={() => handleApprovePayment(pay.id)} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg shadow-sm">核准</button>
+                                      ) : <span className="text-[10px] text-amber-600 font-bold bg-amber-100 px-2 py-1 rounded">待核准</span>
+                                   ) : (
+                                      <span className="bg-emerald-100 text-emerald-700 font-bold text-[10px] sm:text-xs px-2 sm:px-3 py-1 sm:py-1.5 rounded flex items-center gap-1"><CheckCircle size={12}/> 已付</span>
+                                   )}
+                                   {isAdmin && <button onClick={() => handleDeletePayment(pay.id, pay.title)} className="text-slate-300 hover:text-red-500 p-1 bg-white rounded shadow-sm border border-slate-200"><Trash2 size={14}/></button>}
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 sm:gap-3">
-                                 <div className="font-black text-sm sm:text-lg text-slate-700">${pay.amount}</div>
-                                 {pay.status === 'pending' ? (
-                                    isAdmin ? (
-                                      <button onClick={() => handleApprovePayment(pay.id)} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] sm:text-xs px-2 sm:px-3 py-1 sm:py-1.5 rounded shadow-sm">核准</button>
-                                    ) : <span className="text-[10px] text-amber-600 font-bold bg-amber-100 px-2 py-1 rounded">待審核</span>
-                                 ) : (
-                                    <span className="bg-emerald-100 text-emerald-700 font-bold text-[10px] sm:text-xs px-2 sm:px-3 py-1 sm:py-1.5 rounded flex items-center gap-1"><CheckCircle size={10}/> 已付</span>
-                                 )}
-                                 {isAdmin && <button onClick={() => handleDeletePayment(pay.id, pay.title)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 size={14}/></button>}
-                              </div>
+                              
+                              {/* 🌟 備註顯示區塊 */}
+                              {(pay.note || pay.approveNote) && (
+                                <div className="mt-3 border-t border-slate-200 pt-2 space-y-1.5">
+                                  {pay.note && <div className="text-[10px] sm:text-xs text-slate-600 bg-white p-1.5 rounded border border-slate-100"><span className="font-bold text-slate-400">申請說明：</span>{pay.note}</div>}
+                                  {pay.approveNote && <div className="text-[10px] sm:text-xs text-emerald-700 bg-emerald-50/50 p-1.5 rounded border border-emerald-100"><span className="font-bold text-emerald-500">撥款備註：</span>{pay.approveNote}</div>}
+                                </div>
+                              )}
                            </div>
                          ))}
                        </div>
